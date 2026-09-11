@@ -28,12 +28,33 @@ services:
         value: 0.0.0.0
       - key: PYTHONUNBUFFERED
         value: "1"
-      # Model provider key — paste your own after the blueprint is created:
-      # https://openrouter.ai/keys (free models work, $5 credit removes
-      # rate limits / unlocks paid models).
+      # ── Model provider keys ──────────────────────────────────────────────
+      # `sync: false` = set the value in the Render dashboard (never committed).
+      # You only need the key(s) for the provider(s) configured in
+      # render/config.yaml (default: NVIDIA NIM). Add more rows here if you
+      # use model_routes to serve several providers at once.
+      #
+      # NVIDIA NIM — https://build.nvidia.com (key starts with nvapi-)
+      - key: NVIDIA_API_KEY
+        sync: false
+      # OpenRouter — https://openrouter.ai/keys (free ":free" models)
       - key: OPENROUTER_API_KEY
         sync: false
+      # Other providers (uncomment the ones you use):
+      # - key: OPENAI_API_KEY
+      #   sync: false
+      # - key: ANTHROPIC_API_KEY
+      #   sync: false
+      # - key: GOOGLE_API_KEY
+      #   sync: false
+      # - key: GROQ_API_KEY
+      #   sync: false
+      # - key: DEEPSEEK_API_KEY
+      #   sync: false
+      # - key: XAI_API_KEY
+      #   sync: false
+      #
       # If you deploy the web/ dashboard as a static site (see docs), put its
-      # URL here, e.g. https://hermes-dashboard.onrender.com
+      # URL here, e.g. https://hermes-dashboard.onrender.app
       # - key: API_SERVER_CORS_ORIGINS
       #   sync: false

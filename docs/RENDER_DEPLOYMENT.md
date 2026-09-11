@@ -38,8 +38,11 @@ Steps:
 1. Push the repo to your GitHub account (Render deploys from GitHub/GitLab).
 2. Sign up / log in at <https://dashboard.render.com> (free, no card required).
 3. **New + → Blueprint** and connect your repo. Render reads `render.yaml`.
-4. When prompted, fill the `OPENROUTER_API_KEY` environment variable
-   (get one at <https://openrouter.ai/keys>; free `:free` models work).
+4. When prompted, fill the provider key(s) — the default `render/config.yaml`
+   uses **NVIDIA NIM**, so set `NVIDIA_API_KEY` (get it at
+   <https://build.nvidia.com> → "Get API Key", starts with `nvapi-`; new
+   accounts get free credits). Using another provider? See
+   [Adding providers](#adding-providers-nvidia-nim-openai-groq-others).
 5. Click **Apply**. Render builds (`uv sync` from `uv.lock`) and starts the service.
 6. Watch the **Logs** tab; success looks like the api_server adapter binding
    `0.0.0.0:$PORT` and a `200 OK` on the health check.
@@ -64,16 +67,97 @@ Then under **Environment** add:
 | Key | Value |
 |---|---|
 | `API_SERVER_KEY` | output of `openssl rand -hex 32` (≥ 16 chars, required) |
-| `OPENROUTER_API_KEY` | your OpenRouter key (or the key for your provider) |
+| `NVIDIA_API_KEY` | your NVIDIA NIM key (or the key for whatever provider `render/config.yaml` uses) |
 | `API_SERVER_HOST` | `0.0.0.0` |
 
 `API_SERVER_PORT` is set to Render's `$PORT` automatically by `render/start.sh`.
 
-> Using a different provider (OpenAI, Anthropic, Gemini, a self-hosted endpoint)?
-> Edit `render/config.yaml` (`model.provider`, `model.default`, `model.base_url`)
-> and set that provider's standard key env var (`OPENAI_API_KEY`,
-> `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, …). The full provider list is in
-> `cli-config.yaml.example`.
+## Adding providers (NVIDIA NIM, OpenAI, Groq, others)
+
+Hermes reads **which** model to use from `$HERMES_HOME/config.yaml` (seeded from
+`render/config.yaml`) and **keys** from environment variables — so adding a
+provider is always the same two steps:
+
+**1. Pick the provider + model in `render/config.yaml`** (the active file ships
+with NVIDIA NIM; every other supported provider is there in a commented block —
+just swap which `model:` block is uncommented).
+
+**2. Add the provider's key env var in Render** (service → **Environment** →
+Add Environment Variable), then redeploy (Manual Deploy → Clear build cache not
+needed — just *Deploy latest commit* after committing the config change).
+
+### Common providers cheat-sheet
+
+| Provider | `model.provider` | Key env var | Base URL | Free option |
+|---|---|---|---|---|
+| **NVIDIA NIM** | `nvidia` | `NVIDIA_API_KEY` | `https://integrate.api.nvidia.com/v1` | Free credits on build.nvidia.com |
+| OpenRouter | `openrouter` | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` | `:free` models |
+| OpenAI | `openai-api` | `OPENAI_API_KEY` | `https://api.openai.com/v1` | No |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com` | No |
+| Google AI Studio (Gemini) | `gemini` | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta` | Free tier |
+| Groq | `groq` | `GROQ_API_KEY` | `https://api.groq.com/openai/v1` | Free tier |
+| DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/v1` | Cheap |
+| xAI (Grok) | `xai` | `XAI_API_KEY` | `https://api.x.ai/v1` | No |
+| z.ai (GLM) | `zai` | `GLM_API_KEY` | `https://api.z.ai/api/paas/v4` | Some free |
+| Kimi | `kimi-coding` | `KIMI_API_KEY` | `https://api.moonshot.ai/v1` | Some free |
+| Hugging Face | `huggingface` | `HF_TOKEN` | `https://router.huggingface.co/v1` | Free tier |
+| Ollama Cloud | `ollama-cloud` | `OLLAMA_API_KEY` | (provider default) | No |
+| Any OpenAI-compatible endpoint (vLLM, Together, Fireworks, a local NIM…) | `custom` | key per endpoint | your URL | — |
+
+The full always-current list lives in `cli-config.yaml.example` (top of the
+`model:` section) and `hermes_cli/auth.py` (`_REGISTRY_ROWS`).
+
+### NVIDIA NIM specifics
+
+1. Create the key at <https://build.nvidia.com> (sign in → **Get API Key**;
+   format `nvapi-…`). New accounts receive free inference credits; usage-based
+   billing can be added after.
+2. Render → Environment: `NVIDIA_API_KEY = nvapi-…`.
+3. Pick a model id at <https://build.nvidia.com/models> — NIM ids are
+   `vendor/model` (e.g. `nvidia/nemotron-3.5-lightning-30b-a3b`,
+   `meta/llama-3.3-70b-instruct`). Hermes' built-in list for `nvidia` also
+   appears via `GET /v1/models` once the service is up. Put it in
+   `model.default` in `render/config.yaml`.
+4. Commit the config change and push (if auto-deploy is on, Render redeploys),
+   or edit `config.yaml` directly in the Render shell for a one-off test.
+
+> **Self-hosted/local NIM container:** use `provider: "custom"` with your NIM's
+> `base_url` instead — but note a free Render service cannot reach `localhost`
+> on your machine; the NIM needs a public/HTTPS URL.
+
+### Serve SEVERAL providers from one deployment (model routes)
+
+The API server supports per-client model routing. In `render/config.yaml`
+uncomment and edit:
+
+```yaml
+platforms:
+  api_server:
+    enabled: true
+    extra:
+      model_routes:
+        nim:                       # clients send {"model": "nim"}
+          model: "nvidia/nemotron-3.5-lightning-30b-a3b"
+          provider: "nvidia"
+        groq-fast:                 # clients send {"model": "groq-fast"}
+          model: "llama-3.3-70b-versatile"
+          provider: "groq"
+        free:                      # clients send {"model": "free"}
+          model: "meta-llama/llama-3.3-70b-instruct:free"
+          provider: "openrouter"
+```
+
+Set **every** referenced provider's key env var in Render (`NVIDIA_API_KEY`,
+`GROQ_API_KEY`, `OPENROUTER_API_KEY`) — the gateway resolves each route's
+credentials from the environment; keys never need to appear in the YAML.
+Unmapped model names fall back to the global `model.default`. Aliases show up
+in `GET /v1/models` automatically.
+
+### Switching model at runtime (no redeploy)
+
+- An OpenAI client can also send a per-request `provider` field (Hermes
+  extension), or use the Hermes session/chat endpoint's `/model` override —
+  these need only the relevant key to already exist in the environment.
 
 ## Trying it out
 
@@ -85,12 +169,13 @@ curl https://<your-service>.onrender.com/health
 curl https://<your-service>.onrender.com/v1/models \
   -H "Authorization: Bearer $API_SERVER_KEY"
 
-# Chat completion (OpenAI-compatible)
+# Chat completion (OpenAI-compatible). Model must match what you configured in
+# render/config.yaml (NVIDIA NIM example below; use a model_routes alias too).
 curl https://<your-service>.onrender.com/v1/chat/completions \
   -H "Authorization: Bearer $API_SERVER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-        "model": "meta-llama/llama-3.3-70b-instruct:free",
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
         "messages": [{"role": "user", "content": "Say hello in one sentence."}],
         "stream": false
       }'
@@ -123,9 +208,11 @@ alongside a paid service instead.
   (min 16 chars; `openssl rand -hex 32`) in the service's environment.
 - **Build failures around Python version:** the repo pins Python via
   `.python-version` (3.11, within the supported `>=3.11,<3.14`).
-- **Model errors / 402 / rate limits:** the `:free` OpenRouter models are
-  rate-limited and change over time — edit `render/config.yaml` to a current
-  model id from <https://openrouter.ai/models?max_price=0>, or add credits.
+- **Model errors / 402 / rate limits:** free-tier models (NVIDIA trial credits
+  exhausted, OpenRouter `:free`, Groq limits) are rate/capacity-limited —
+  check the model id against <https://build.nvidia.com/models> (or your
+  provider's catalog), add credits, or switch providers in
+  `render/config.yaml`.
 - **Sessions/memory disappear:** expected on free (ephemeral disk). Upgrade to a
   paid instance with a persistent disk mounted at `$HERMES_HOME` to keep them.
 - **Logs show the first-run setup wizard prompt:** it only appears when

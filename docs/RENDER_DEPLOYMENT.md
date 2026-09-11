@@ -39,6 +39,11 @@ Modal/Daytona (see the main README).
 - `render/healthcheck.py` — works in both modes (`/api/health`, `/health`).
 - `render/config.yaml` — minimal headless model config (provider + model);
   keys always come from Render environment variables.
+- `render/warm_caches.py` — pre-fetches model catalogs (models.dev, OpenRouter
+  `/v1/models`, curated manifests) at image build and again (with provider
+  keys) in the background at boot, so the model picker opens instantly.
+- `render/home-seed/` — build-time catalog cache baked into the image (not in
+  git); seeded into `$HERMES_HOME` by `start.sh`.
 - `render/trimmed-plugins/` — created during image build; contains only the
   bundled basic-auth plugin so dashboard mode loads no heavy plugins.
 
@@ -235,6 +240,19 @@ Expected: `200` with a small JSON body, no headers/auth needed. Configure:
 - **Build fails with `libatomic.so.1: cannot open shared object file`:** old
   cached image — the runtime stage now installs `libatomic1 libstdc++6` for
   the copied Node binary; **Clear build cache & deploy**.
+- **Model picker buffers forever ("models are not loading"):** on a cold
+  cache the picker synchronously downloads multi-MB model catalogs
+  (models.dev, OpenRouter `/v1/models`, curated manifests); on the 0.1-CPU
+  free instance this can take minutes, and `/data` wipes on every cold
+  start. The image pre-fetches the **public** catalogs at build time
+  (`render/warm_caches.py --public-only` → baked `render/home-seed`, copied
+  into `$HERMES_HOME` by `start.sh`) and background-warms the **key-gated**
+  catalogs at every boot (`warm-caches.log` shows progress). If you see this
+  on an older deploy, **Clear build cache & deploy**; to warm on demand,
+  open `https://<service>.onrender.com/api/health` once after boot and wait
+  ~1 min. Verify caches exist: files `models_dev_cache.json`,
+  `provider_models_cache.json`, and `cache/reasoning_caps.json` under
+  `/data` (visible via the dashboard Files API / a shell).
 - **Chat tab: "Chat connection interrupted (code 1006)":** the in-browser
   chat spawns the Node-based TUI over `/api/pty` + `/api/ws`. The image must
   (1) ship the prebuilt TUI bundle `hermes_cli/tui_dist/entry.js` and (2) have

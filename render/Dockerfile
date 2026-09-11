@@ -73,6 +73,17 @@ RUN mkdir -p render/trimmed-plugins/dashboard_auth \
  && cp plugins/dashboard_auth/_shared.py render/trimmed-plugins/dashboard_auth/ \
  && uv pip install --python /app/.venv/bin/python --no-cache-dir --no-deps -e "."
 
+# Pre-fetch public model catalogs (models.dev, curated manifest, OpenRouter
+# reasoning caps) into a baked HERMES_HOME seed. Without this, the first model
+# picker open on a cold free instance synchronously downloads multi-MB JSON on
+# 0.1 CPU (minutes of spinner). Best-effort: tolerate build-network hiccups.
+RUN mkdir -p render/home-seed \
+ && cp render/config.yaml render/home-seed/config.yaml \
+ && HERMES_HOME=/app/render/home-seed \
+    HERMES_BUNDLED_PLUGINS=/app/render/trimmed-plugins \
+    /app/.venv/bin/python render/warm_caches.py --public-only || echo "catalog prewarm skipped (will warm at runtime)" \
+ && rm -f render/home-seed/auth.json render/home-seed/auth.lock
+
 # ---- Stage 3: runtime --------------------------------------------------------
 FROM python:3.11-slim-bookworm AS runtime
 

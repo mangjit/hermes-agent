@@ -31,6 +31,13 @@ if [ ! -f "$HERMES_HOME/config.yaml" ]; then
   cp "$REPO_ROOT/render/config.yaml" "$HERMES_HOME/config.yaml"
 fi
 
+# Restore catalogs baked at image build (models.dev api.json, curated manifests,
+# OpenRouter reasoning caps) so the model picker never synchronously downloads
+# multi-MB JSON on a cold 0.1-CPU instance (endless "loading models" spinner).
+if [ -d "$REPO_ROOT/render/home-seed" ]; then
+  cp -rn "$REPO_ROOT/render/home-seed/." "$HERMES_HOME/" 2>/dev/null || true
+fi
+
 # Render routes traffic to the port it assigns via $PORT and expects the app
 # to bind 0.0.0.0.
 export PYTHONUNBUFFERED="1"
@@ -46,6 +53,15 @@ elif [ -x "$REPO_ROOT/.venv/bin/hermes" ]; then
 else
   HERMES_BIN=(python -m hermes_cli.main)
   PYTHON_BIN="python"
+fi
+
+# Background-warm key-gated catalog caches (provider model lists/pricing) with
+# the runtime provider key. Public catalogs are already baked via home-seed.
+# Best effort — must never block the port bind. Logs: $HERMES_HOME/warm-caches.log
+if [ "${HERMES_SKIP_WARM:-0}" != "1" ] && [ -f "$REPO_ROOT/render/warm_caches.py" ]; then
+  setsid "$PYTHON_BIN" "$REPO_ROOT/render/warm_caches.py" \
+    >>"$HERMES_HOME/warm-caches.log" 2>&1 < /dev/null &
+  echo "   catalog warm-up running in background (warm-caches.log)"
 fi
 
 case "$MODE" in

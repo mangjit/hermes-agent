@@ -1,0 +1,85 @@
+# Render Blueprint — Hermes Agent as a free Docker web service.
+# Docs: docs/RENDER_DEPLOYMENT.md
+#
+# In Render: New + → Blueprint → pick this repo + the branch → Render reads
+# this file and builds the image from render/Dockerfile.
+#
+# HERMES_RENDER_MODE (see render/start.sh):
+#   dashboard (default)  web UI + in-browser chat on the service URL,
+#                        protected by username/password (below)
+#   api                  OpenAI-compatible API at /v1 (Bearer API_SERVER_KEY)
+#
+# Free tier: sleeps after 15 min idle (incoming requests wake it; cold start
+# ~30-60s), 512 MB RAM, ephemeral disk. NOT for always-on Telegram/Discord
+# polling bots — see docs/RENDER_DEPLOYMENT.md.
+
+services:
+  - type: web
+    name: hermes-agent
+    runtime: docker
+    plan: free
+    region: oregon
+    # No `branch:` pin — Render deploys the branch you select when creating
+    # the Blueprint (change it later under Settings → Build & Deploy).
+    dockerfilePath: render/Dockerfile
+    dockerContext: .
+    # No dockerCommand: the image CMD is `bash render/start.sh`.
+    # Dashboard mode answers /api/health publicly (pre-login); api mode
+    # answers /health instead (change this path if you switch modes).
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # ── Deployment mode ──────────────────────────────────────────────────
+      - key: HERMES_RENDER_MODE
+        value: dashboard
+
+      # ── Dashboard login (mode=dashboard) ─────────────────────────────────
+      # Browse to https://<service>.onrender.com and sign in with these.
+      - key: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+        value: admin
+      - key: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+        generateValue: true
+      # Signs session cookies; generated per service.
+      - key: HERMES_DASHBOARD_BASIC_AUTH_SECRET
+        generateValue: true
+      # Public URL is auto-derived from Render's RENDER_EXTERNAL_HOSTNAME in
+      # start.sh; set it explicitly only for a custom domain.
+      # - key: HERMES_DASHBOARD_PUBLIC_URL
+      #   sync: false
+
+      # ── OpenAI-compatible API (mode=api) ─────────────────────────────────
+      # Used as the Bearer token at /v1/* (and as dashboard cookie-secret
+      # fallback).
+      - key: API_SERVER_KEY
+        generateValue: true
+      - key: API_SERVER_HOST
+        value: 0.0.0.0
+
+      - key: PYTHONUNBUFFERED
+        value: "1"
+
+      # ── Model provider keys (used by the in-browser chat in either mode) ─
+      # `sync: false` = set the value in the Render dashboard (never commit).
+      #
+      # OpenRouter — https://openrouter.ai/keys (default render/config.yaml,
+      # free ":free" models)
+      - key: OPENROUTER_API_KEY
+        sync: false
+      # NVIDIA NIM — https://build.nvidia.com (key starts with nvapi-).
+      # To use it: set this AND switch the active model block in
+      # render/config.yaml to nvidia.
+      - key: NVIDIA_API_KEY
+        sync: false
+      # Other providers (uncomment the ones you use):
+      # - key: OPENAI_API_KEY
+      #   sync: false
+      # - key: ANTHROPIC_API_KEY
+      #   sync: false
+      # - key: GOOGLE_API_KEY
+      #   sync: false
+      # - key: GROQ_API_KEY
+      #   sync: false
+      # - key: DEEPSEEK_API_KEY
+      #   sync: false
+      # - key: XAI_API_KEY
+      #   sync: false

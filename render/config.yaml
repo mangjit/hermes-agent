@@ -1,100 +1,79 @@
-# Minimal headless Hermes config for a Render free web service.
-# Copied into $HERMES_HOME/config.yaml on first boot by render/start.sh.
+# Minimal headless Hermes config for a Render web service.
+# Copied into $HERMES_HOME/config.yaml on first boot by render/start.sh
+# (free tier = ephemeral disk, so it re-seeds on every deploy/cold start).
 #
 # SECRETS NEVER GO HERE — provider keys are read from environment variables
 # (set them in Render → your service → Environment). This file only says
-# WHICH provider/model to use; base URLs below are even optional (Hermes
-# knows each provider's default URL), they are shown for clarity.
+# WHICH provider/model to use.
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NVIDIA NIM (build.nvidia.com) — ACTIVE EXAMPLE
+# OpenRouter — ACTIVE DEFAULT (free models work with OPENROUTER_API_KEY)
+# Get a key: https://openrouter.ai/keys  ·  free models: ?max_price=0
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. Get a key at https://build.nvidia.com (top right → "Get API Key",
-#    starts with `nvapi-`; new accounts get free inference credits).
-# 2. In Render → Environment add:  NVIDIA_API_KEY = nvapi-...
-# 3. Browse model IDs at https://build.nvidia.com/models
-#    (or call GET https://<your-service>.onrender.com/v1/models once live).
 model:
-  default: "nvidia/nemotron-3.5-lightning-30b-a3b"
-  provider: "nvidia"
-  base_url: "https://integrate.api.nvidia.com/v1"   # optional; this is the default
+  default: "meta-llama/llama-3.3-70b-instruct:free"
+  provider: "openrouter"
+  base_url: "https://openrouter.ai/api/v1"   # optional; this is the default
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Other providers — comment out the NVIDIA block above and uncomment one.
-# Remember to add the matching env var in Render.
+# Other providers — comment out the OpenRouter block above and uncomment one,
+# then add the matching env var in Render.
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# --- OpenRouter (many vendors behind one key; has free ":free" models) ---
-# env var: OPENROUTER_API_KEY        https://openrouter.ai/keys
+# --- NVIDIA NIM (build.nvidia.com; key starts with nvapi-) ---
+# env var: NVIDIA_API_KEY     browse model ids: https://build.nvidia.com/models
 #
 # model:
-#   default: "meta-llama/llama-3.3-70b-instruct:free"
-#   provider: "openrouter"
-#   base_url: "https://openrouter.ai/api/v1"
+#   default: "nvidia/nemotron-3.5-lightning-30b-a3b"
+#   provider: "nvidia"
+#   base_url: "https://integrate.api.nvidia.com/v1"
 #
-# --- OpenAI ---
-# env var: OPENAI_API_KEY
-#
+# --- OpenAI ---   env var: OPENAI_API_KEY
 # model:
 #   default: "gpt-4o"
 #   provider: "openai-api"
 #   base_url: "https://api.openai.com/v1"
 #
-# --- Anthropic ---
-# env var: ANTHROPIC_API_KEY
-#
+# --- Anthropic ---   env var: ANTHROPIC_API_KEY
 # model:
 #   default: "claude-sonnet-4-5"
 #   provider: "anthropic"
 #   base_url: "https://api.anthropic.com"
 #
-# --- Google AI Studio (Gemini) ---
-# env var: GOOGLE_API_KEY (or GEMINI_API_KEY)
-#
+# --- Google AI Studio (Gemini) ---   env var: GOOGLE_API_KEY (or GEMINI_API_KEY)
 # model:
 #   default: "gemini-2.5-pro"
 #   provider: "gemini"
 #   base_url: "https://generativelanguage.googleapis.com/v1beta"
 #
-# --- Groq (very fast, has a free tier) ---
-# env var: GROQ_API_KEY
-#
+# --- Groq (very fast, free tier) ---   env var: GROQ_API_KEY
 # model:
 #   default: "llama-3.3-70b-versatile"
 #   provider: "groq"
 #   base_url: "https://api.groq.com/openai/v1"
 #
-# --- DeepSeek ---
-# env var: DEEPSEEK_API_KEY
-#
+# --- DeepSeek ---   env var: DEEPSEEK_API_KEY
 # model:
 #   default: "deepseek-chat"
 #   provider: "deepseek"
 #   base_url: "https://api.deepseek.com/v1"
 #
-# --- xAI (Grok) ---
-# env var: XAI_API_KEY
-#
+# --- xAI (Grok) ---   env var: XAI_API_KEY
 # model:
 #   default: "grok-4"
 #   provider: "xai"
 #   base_url: "https://api.x.ai/v1"
 #
 # --- Any other OpenAI-compatible endpoint (vLLM, Together, Fireworks, local NIM...) ---
-# env var: a custom key var if the endpoint needs one
-#
 # model:
 #   default: "your-model-id"
 #   provider: "custom"
 #   base_url: "https://your-host/v1"
-#   # api_key: "..."   # only if you must put it here; prefer the env var
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MULTI-PROVIDER (optional): expose several providers behind one deployment.
-# Clients pick a model by the alias name; the gateway routes it to the named
-# provider and automatically uses that provider's key from the environment
-# (e.g. NVIDIA_API_KEY, OPENROUTER_API_KEY — just set all of them in Render).
-# See docs/RENDER_DEPLOYMENT.md for the full list and examples.
+# MULTI-PROVIDER for mode=api (optional): expose providers behind aliases.
+# Clients pick the alias in the "model" field; the gateway routes to the named
+# provider using its key from the environment (set all keys in Render).
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # platforms:
@@ -102,15 +81,12 @@ model:
 #     enabled: true
 #     extra:
 #       model_routes:
-#         # client sends  {"model": "nim"}       -> NVIDIA NIM
 #         nim:
 #           model: "nvidia/nemotron-3.5-lightning-30b-a3b"
 #           provider: "nvidia"
-#         # client sends  {"model": "groq-fast"} -> Groq
 #         groq-fast:
 #           model: "llama-3.3-70b-versatile"
 #           provider: "groq"
-#         # client sends  {"model": "free"}      -> OpenRouter free model
 #         free:
 #           model: "meta-llama/llama-3.3-70b-instruct:free"
 #           provider: "openrouter"

@@ -1,81 +1,125 @@
 #!/usr/bin/env bash
-# Render free-tier startup for the Hermes Agent gateway in HTTP "api_server"
-# mode (OpenAI-compatible API). See docs/RENDER_DEPLOYMENT.md.
+# Render startup for Hermes Agent.
+#
+# HERMES_RENDER_MODE selects what runs on Render's $PORT:
+#   dashboard (default)  web UI + in-browser chat (`hermes dashboard`),
+#                        login = HERMES_DASHBOARD_BASIC_AUTH_USERNAME/PASSWORD
+#   api                  OpenAI-compatible gateway api_server (`hermes gateway`)
+#
+# See docs/RENDER_DEPLOYMENT.md.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 REPO_ROOT="$(pwd)"
 
-# ── Diagnostics: prove which commit + deps this deploy is actually running ───
 # Render passes SOURCE_COMMIT as a Docker build arg/ENV; native checkouts fall
 # back to git.
 COMMIT="${SOURCE_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
-echo "== render/start.sh (commit ${COMMIT:0:9}) =="
+MODE="${HERMES_RENDER_MODE:-dashboard}"
+echo "== render/start.sh (commit ${COMMIT:0:9}, mode ${MODE}) =="
 echo "   PORT=${PORT:-<unset>}  HERMES_HOME=${HERMES_HOME:-<unset>}"
 
-# ── Dependency self-heal ─────────────────────────────────────────────────────
-# The api_server adapter REQUIRES aiohttp (it lives in an optional extra, so a
-# plain `uv sync --no-dev` misses it). If the Render Build Command wasn't
-# updated (manually-created services ignore render.yaml changes), install it
-# HERE at startup so the port always binds. Pinned to the lockfile version.
-if ! .venv/bin/python -c "import aiohttp" 2>/dev/null; then
-  echo "!! aiohttp missing from .venv — installing at runtime (fix the Build"
-  echo "   Command to 'uv sync --frozen --no-dev --extra sms' to skip this)."
-  if command -v uv >/dev/null 2>&1; then
-    uv sync --frozen --no-dev --extra sms
-  else
-    .venv/bin/python -m pip install 'aiohttp==3.14.3' 2>/dev/null \
-      || { .venv/bin/python -m ensurepip && .venv/bin/python -m pip install 'aiohttp==3.14.3'; }
-  fi
-fi
-.venv/bin/python - <<'PY'
-import aiohttp, sys
-print(f"   aiohttp {aiohttp.__version__} OK on {sys.version.split()[0]}")
-PY
-
 # All Hermes state (config.yaml, session SQLite DB, skills, logs) lives under
-# HERMES_HOME. On Render free this is EPHEMERAL — it is reset on every deploy
-# and every cold start. Set HERMES_HOME explicitly so the app and this script
-# agree on the path.
-export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+# HERMES_HOME. On Render free this is EPHEMERAL — reset on every deploy and
+# cold start.
+export HERMES_HOME="${HERMES_HOME:-/data}"
 mkdir -p "$HERMES_HOME"
 
 # Seed a minimal headless config (model/provider) on first boot.
-# Render discards the disk on deploy, so this re-seeds automatically.
 # Secrets are NEVER put in this file — they come from Render environment vars.
 if [ ! -f "$HERMES_HOME/config.yaml" ]; then
   cp "$REPO_ROOT/render/config.yaml" "$HERMES_HOME/config.yaml"
 fi
 
 # Render routes traffic to the port it assigns via $PORT and expects the app
-# to bind 0.0.0.0. Setting API_SERVER_KEY also auto-enables the api_server
-# platform (gateway/config_env.py) — no platforms block needed in config.yaml.
-export API_SERVER_HOST="0.0.0.0"
-export API_SERVER_PORT="${PORT:-8642}"
+# to bind 0.0.0.0.
 export PYTHONUNBUFFERED="1"
 
-# ── Fast boot on the free tier (512 MB / shared 0.1 CPU) ─────────────────────
-# The port must open before Render's deploy port-scan times out. These knobs
-# move every non-essential boot cost AFTER the socket binds (or remove it):
-#
-# HERMES_SAFE_MODE=1        skip bundled-plugin discovery/import, MCP servers,
-#                           shell hooks and outbound webhooks (none of which a
-#                           headless API server needs; also removes the
-#                           "Failed to load plugin …" warnings).
-# HERMES_STARTUP_WARMUP_TIMEOUT=0
-#                           don't pre-build the tool registry / system prompt
-#                           during boot (the ~20-60s of "check_fn … False"
-#                           scans). The first API request initializes lazily;
-#                           /health is available immediately.
-# HERMES_STARTUP_RESTORE_DRAIN_TIMEOUT=1
-#                           ephemeral disk has no previous sessions to resume.
-export HERMES_SAFE_MODE="${HERMES_SAFE_MODE:-1}"
-export HERMES_STARTUP_WARMUP_TIMEOUT="${HERMES_STARTUP_WARMUP_TIMEOUT:-0}"
-export HERMES_STARTUP_RESTORE_DRAIN_TIMEOUT="${HERMES_STARTUP_RESTORE_DRAIN_TIMEOUT:-1}"
-echo "   SAFE_MODE=$HERMES_SAFE_MODE WARMUP_TIMEOUT=$HERMES_STARTUP_WARMUP_TIMEOUT RESTORE_DRAIN=$HERMES_STARTUP_RESTORE_DRAIN_TIMEOUT"
+# Locate the hermes entrypoint + interpreter: PATH on the Docker image,
+# .venv on native runtimes, finally the system python.
+if command -v hermes >/dev/null 2>&1; then
+  HERMES_BIN=(hermes)
+  PYTHON_BIN="$(command -v python)"
+elif [ -x "$REPO_ROOT/.venv/bin/hermes" ]; then
+  HERMES_BIN=("$REPO_ROOT/.venv/bin/hermes")
+  PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
+else
+  HERMES_BIN=(python -m hermes_cli.main)
+  PYTHON_BIN="python"
+fi
 
-# uv created .venv at build time. --no-supervise = run in the foreground
-# (Render manages the process; s6/systemd supervision does not exist here).
-# Success marker in the logs:
-#   "API server listening on http://0.0.0.0:$PORT (model: …)"
-exec .venv/bin/hermes gateway run --no-supervise
+case "$MODE" in
+  dashboard)
+    # The web UI is prebuilt into /app/hermes_cli/web_dist at image build time
+    # (or locally in hermes_cli/web_dist for native runtimes).
+    if [ -z "${HERMES_WEB_DIST:-}" ] && [ -d "$REPO_ROOT/hermes_cli/web_dist" ]; then
+      export HERMES_WEB_DIST="$REPO_ROOT/hermes_cli/web_dist"
+    fi
+    if [ ! -f "${HERMES_WEB_DIST:-/nonexistent}/index.html" ]; then
+      echo "!! Web UI dist missing (HERMES_WEB_DIST=${HERMES_WEB_DIST:-unset})." >&2
+      echo "   Use the Docker image (render/Dockerfile builds it), or run"   >&2
+      echo "   'npm run build --workspace web' on the host."                 >&2
+      exit 1
+    fi
+
+    # A non-loopback bind ALWAYS requires an auth provider (June-2026
+    # hardening — unauthenticated public dashboards were exploited). Use the
+    # bundled username/password plugin; fail early with an actionable message
+    # instead of letting the server SystemExit.
+    : "${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:?set HERMES_DASHBOARD_BASIC_AUTH_USERNAME (e.g. admin)}"
+    : "${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:?set HERMES_DASHBOARD_BASIC_AUTH_PASSWORD (generateValue in render.yaml)}"
+    export HERMES_DASHBOARD_BASIC_AUTH_USERNAME HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+    export HERMES_DASHBOARD_BASIC_AUTH_SECRET="${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-$API_SERVER_KEY}"
+
+    # Only the bundled auth plugin should be discovered (trimmed tree baked in
+    # render/Dockerfile). Native runtimes fall back to the full plugins/ tree.
+    if [ -d "$REPO_ROOT/render/trimmed-plugins" ]; then
+      export HERMES_BUNDLED_PLUGINS="$REPO_ROOT/render/trimmed-plugins"
+    fi
+
+    # Trust the public Render hostname (used for Host/Origin validation,
+    # secure cookies and OAuth redirects). Render sets RENDER_EXTERNAL_HOSTNAME.
+    if [ -z "${HERMES_DASHBOARD_PUBLIC_URL:-}" ] && [ -n "${RENDER_EXTERNAL_HOSTNAME:-}" ]; then
+      export HERMES_DASHBOARD_PUBLIC_URL="https://$RENDER_EXTERNAL_HOSTNAME"
+    fi
+    echo "   public URL: ${HERMES_DASHBOARD_PUBLIC_URL:-<unset; set HERMES_DASHBOARD_PUBLIC_URL>}"
+
+    # Success markers: "HERMES_DASHBOARD_READY port=$PORT", then browse to /
+    exec "${HERMES_BIN[@]}" dashboard --host 0.0.0.0 --port "${PORT:-9119}" --no-open --skip-build
+    ;;
+
+  api)
+    # ── Dependency self-heal (native runtime only; Docker has it baked in) ──
+    if ! "$PYTHON_BIN" -c "import aiohttp" 2>/dev/null; then
+      echo "!! aiohttp missing — installing at runtime (fix Build Command to"
+      echo "   'uv sync --frozen --no-dev --extra sms' to skip this step)."
+      if command -v uv >/dev/null 2>&1; then
+        UV_PROJECT_ENVIRONMENT="$(dirname "$(dirname "$PYTHON_BIN")")" \
+          uv sync --frozen --no-dev --extra sms
+      else
+        "$PYTHON_BIN" -m pip install 'aiohttp==3.14.3' \
+          || { "$PYTHON_BIN" -m ensurepip && "$PYTHON_BIN" -m pip install 'aiohttp==3.14.3'; }
+      fi
+    fi
+    "$PYTHON_BIN" -c "import aiohttp,sys; print(f'   aiohttp {aiohttp.__version__} OK on {sys.version.split()[0]}')"
+
+    # Setting API_SERVER_KEY also auto-enables the api_server platform
+    # (gateway/config_env.py).
+    export API_SERVER_HOST="0.0.0.0"
+    export API_SERVER_PORT="${PORT:-8642}"
+
+    # ── Fast boot on the free tier (512 MB / shared 0.1 CPU) ────────────────
+    export HERMES_SAFE_MODE="${HERMES_SAFE_MODE:-1}"
+    export HERMES_STARTUP_WARMUP_TIMEOUT="${HERMES_STARTUP_WARMUP_TIMEOUT:-0}"
+    export HERMES_STARTUP_RESTORE_DRAIN_TIMEOUT="${HERMES_STARTUP_RESTORE_DRAIN_TIMEOUT:-1}"
+    echo "   SAFE_MODE=$HERMES_SAFE_MODE WARMUP_TIMEOUT=$HERMES_STARTUP_WARMUP_TIMEOUT"
+
+    # Success marker: "API server listening on http://0.0.0.0:$PORT (model: …)"
+    exec "${HERMES_BIN[@]}" gateway run --no-supervise
+    ;;
+
+  *)
+    echo "Unknown HERMES_RENDER_MODE='$MODE' (use 'dashboard' or 'api')." >&2
+    exit 1
+    ;;
+esac

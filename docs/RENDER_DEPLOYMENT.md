@@ -213,6 +213,17 @@ alongside a paid service instead.
   check the model id against <https://build.nvidia.com/models> (or your
   provider's catalog), add credits, or switch providers in
   `render/config.yaml`.
+- **Port opens very slowly / deploy port-scan times out (free 0.1 shared CPU):**
+  `render/start.sh` ships fast-boot knobs for exactly this —
+  `HERMES_SAFE_MODE=1` (skips bundled-plugin/MCP/import-heavy discovery),
+  `HERMES_STARTUP_WARMUP_TIMEOUT=0` (defers the tool-registry/system-prompt
+  warm-up to the first API request instead of ~20–60 s of `check_fn` scans at
+  boot), and `HERMES_STARTUP_RESTORE_DRAIN_TIMEOUT=1` (nothing to resume on
+  ephemeral disk). The success log line is
+  `API server listening on http://0.0.0.0:$PORT (model: …)` — the port opens
+  at that line, typically under ~30–45 s after process start. The **first
+  chat request** after a cold start is slower (lazy machinery init); retry it.
+  To check from outside while it wakes: `curl https://<service>.onrender.com/health`.
 - **`aiohttp not installed` / `No adapter available for api_server` / "no open ports detected":**
   the API server is an aiohttp app; aiohttp is an optional/lazy dependency
   omitted by `uv sync --no-dev`. The shipped build command uses

@@ -171,6 +171,55 @@ curl https://<service>.onrender.com/v1/chat/completions \
       }'
 ```
 
+## Keeping it awake with a cron job (optional)
+
+Free web services sleep after ~15 min without inbound traffic. An external
+cron hitting the **public, unauthenticated** health endpoint every 10 min
+keeps it warm:
+
+| Mode | Keep-alive URL |
+|---|---|
+| `dashboard` (default) | `https://<service>.onrender.com/api/health` |
+| `api` | `https://<service>.onrender.com/health` |
+
+Expected: `200` with a small JSON body, no headers/auth needed. Configure:
+
+- **cron-job.org (free, easiest):** Create cronjob → URL above → schedule
+  every **10 minutes** (`*/10 * * * *`) → under *Advanced* set timeout to
+  **90 s** (a hit that lands during cold start blocks until the container
+  wakes; mark such runs as tolerated).
+- **UptimeRobot / Better Stack / healthchecks.io:** HTTP(s) monitor to the
+  same URL, interval 5–10 min.
+- **Linux/macOS crontab** (`crontab -e`):
+
+  ```cron
+  */10 * * * * curl -fsS -m 90 https://<service>.onrender.com/api/health >/dev/null 2>&1
+  ```
+
+- **GitHub Actions** (repo → Actions, also works from a private repo):
+
+  ```yaml
+  # .github/workflows/keepalive.yml
+  name: keepalive
+  on:
+    schedule:
+      - cron: "*/10 * * * *"
+    workflow_dispatch: {}
+  jobs:
+    ping:
+      runs-on: ubuntu-latest
+      steps:
+        - run: curl -fsS -m 90 https://<service>.onrender.com/api/health
+  ```
+
+> **Free-hour math:** the allowance is 750 instance-hours/month per account.
+> A pinger at 10-min intervals keeps ONE service essentially always running
+> (~744 h in a 31-day month) — it fits, but only for a single service, and
+> it removes the idle-cost saving the sleep exists for. Remove or lengthen
+> the interval (e.g. 12–14 min still mostly prevents sleep during active
+> hours; pause it overnight) if you don't need 24/7. The health endpoint is
+> cheap — it does not invoke the model or create sessions.
+
 ## Operations & troubleshooting
 
 - **Verifying the deployed commit / mode:** every boot prints
@@ -199,7 +248,9 @@ curl https://<service>.onrender.com/v1/chat/completions \
   the native Python runtime (Option C, below) — the Docker image bakes
   aiohttp in.
 - **First hit after idle is slow:** the free instance is waking; retry after
-  ~30–90 s. Don't run uptime-pingers — they burn the 750 free hours.
+  ~30–90 s. To prevent sleep entirely, see
+  [Keeping it awake with a cron job](#keeping-it-awake-with-a-cron-job-optional)
+  (one always-on free service fits the 750 free hours/month).
 - **Model errors / 401 / 402 / rate limits:** missing or exhausted provider
   key — set the env var matching `render/config.yaml`; `:free` OpenRouter
   models and NVIDIA trial credits are rate/capacity-limited.

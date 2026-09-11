@@ -1,32 +1,43 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Image for Hermes Agent on Render (free tier) — can run in two modes
+# Image for Hermes Agent on Render (free tier) — runs in two modes
 # (selected with HERMES_RENDER_MODE in render/start.sh):
 #
-#   dashboard (default)  `hermes dashboard` — the web UI + in-browser chat
-#                        served on $PORT, protected by username/password.
-#   api                  the gateway's OpenAI-compatible api_server on $PORT.
+#   dashboard (default)  `hermes dashboard` — web UI + in-browser chat on
+#                        $PORT. The Chat tab needs: (1) the prebuilt web UI,
+#                        (2) the prebuilt Node TUI bundle, (3) a node binary
+#                        at runtime. All three are baked here. Login:
+#                        HERMES_DASHBOARD_BASIC_AUTH_USERNAME/PASSWORD.
+#   api                  OpenAI-compatible gateway api_server on $PORT.
 #
-# This is NOT the repo's full-fat Dockerfile (that bundles Playwright, s6 and
-# a Node runtime). Here Node is used ONLY at build time to compile the web UI;
-# the runtime is a slim Python image.
+# Node is used at BUILD time (web + TUI bundles) and a ~100 MB node binary is
+# kept at RUNTIME for the dashboard Chat PTY. The runtime stays a slim Python
+# image — no Playwright, no s6, no npm installs on cold start.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ---- Stage 1: build the web dashboard (Vite -> hermes_cli/web_dist) ----------
-FROM node:26-bookworm-slim AS web
+# ---- Stage 1: build web UI (Vite) + TUI (esbuild) ---------------------------
+FROM node:26-bookworm-slim@sha256:9e6f9357d371591e32ab6f2d8a26d63bdd0d17c29eee3f4f3e7e454d9634bf73 AS web
 
 WORKDIR /build
 
-# Install only the web workspace's dependency tree (the file: dependency on
-# apps/shared is resolved from the copied manifests).
+# Manifests first (with the file: workspace packages' package.json + src), so
+# the npm install layer is cached unless dependencies change.
 COPY package.json package-lock.json ./
 COPY web/package.json web/package.json
+COPY ui-tui/package.json ui-tui/package.json
+COPY ui-tui/packages/hermes-ink/package.json ui-tui/packages/hermes-ink/package.json
 COPY apps/shared/package.json apps/shared/package.json
-RUN npm install --workspace web --no-audit --fetch-retries=5
+COPY ui-tui/packages/hermes-ink/src ui-tui/packages/hermes-ink/src
+COPY apps/shared/src apps/shared/src
+RUN npm install --workspace web --workspace ui-tui --no-audit --fetch-retries=5
 
-# Sources, then the production build (outDir: ../hermes_cli/web_dist).
+# Sources, then both production builds:
+#   web  -> /build/hermes_cli/web_dist   (Vite outDir)
+#   tui  -> /build/ui-tui/dist/entry.js  (self-contained esbuild bundle,
+#                                         "no runtime node_modules needed")
+# node_modules is excluded from the build context by .dockerignore.
 COPY web/ web/
-COPY apps/shared/ apps/shared/
-RUN npm run build --workspace web
+COPY ui-tui/ ui-tui/
+RUN npm run build --workspace web && npm run build --workspace ui-tui
 
 # ---- Stage 2: Python dependencies -------------------------------------------
 FROM python:3.11-slim-bookworm AS builder
@@ -71,17 +82,28 @@ ENV SOURCE_COMMIT=${SOURCE_COMMIT} \
     PYTHONUNBUFFERED=1 \
     PATH=/app/.venv/bin:$PATH \
     HERMES_HOME=/data \
-    HERMES_WEB_DIST=/app/hermes_cli/web_dist
+    HERMES_WEB_DIST=/app/hermes_cli/web_dist \
+    # Never try to download Node on a cold start (it is copied below).
+    HERMES_SKIP_NODE_BOOTSTRAP=1
+
+# node + npm at runtime (the Chat PTY checks for both). Copied from the same
+# bookworm-based node image used in stage 1, so glibc matches. Pattern mirrors
+# the repo's root Dockerfile.
+COPY --chmod=0755 --from=web /usr/local/bin/node /usr/local/bin/
+COPY --from=web /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 WORKDIR /app
 
-# .venv + source tree (editable install points at /app) + compiled web UI.
+# .venv + source tree (editable install points at /app).
 COPY --from=builder /app /app
+# Compiled frontends at the locations _find_bundled_tui / HERMES_WEB_DIST read.
 COPY --from=web /build/hermes_cli/web_dist /app/hermes_cli/web_dist
-RUN mkdir -p /data
+COPY --from=web /build/ui-tui/dist/entry.js /app/hermes_cli/tui_dist/entry.js
+RUN mkdir -p /data && node --version && hermes --version
 
-# Render injects $PORT at runtime (10000 by default); render/start.sh maps it
-# to the dashboard/api port. EXPOSE is documentation only.
+# Render injects $PORT at runtime (10000 by default); render/start.sh maps it.
 EXPOSE 10000
 
 # Works for both modes: dashboard -> /api/health (public, pre-login),

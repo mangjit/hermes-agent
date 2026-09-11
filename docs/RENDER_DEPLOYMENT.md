@@ -19,7 +19,7 @@ and `/v1/*`. For a web UI use `dashboard` mode (the default).
 |---|---|
 | Web services **sleep after ~15 min without inbound traffic**; cold start ~20–90 s | Fine for a request-driven dashboard/API (visits and requests wake it). **Not fine for Telegram/Discord/Slack bots using long-polling** — outbound polling doesn't keep it awake, so the bot goes offline and misses messages. |
 | **No free background workers** | Only the web-service shape works on free. |
-| **512 MB RAM, shared CPU** | The idle dashboard uses ~150–200 MB and each in-browser chat adds a Python agent process — a handful of concurrent chats fit. Browser/Playwright tools and voice may OOM. |
+| **512 MB RAM, shared CPU** | The idle dashboard uses ~155 MB; each open Chat tab adds a ~120 MB Node TUI process. One–two concurrent chats fit; browser/Playwright tools and voice may OOM. |
 | **Ephemeral filesystem** (wiped on every deploy & restart) | SQLite sessions, learned skills and memory under `/data` don't survive restarts. Treat free as **stateless**; persistent disks are a paid feature. |
 | 750 free instance-hours/month per account | One service can essentially run month-round (it stops accruing hours while asleep). |
 
@@ -30,9 +30,10 @@ Modal/Daytona (see the main README).
 ## Files in this repo
 
 - `render.yaml` — Render Blueprint: free Docker web service + env vars.
-- `render/Dockerfile` — slim image, 3 stages: Node builds the web UI
-  (build-time only), uv installs locked Python deps + aiohttp,
-  `python:3.11-slim` runtime. No Playwright/s6/Node runtime bloat.
+- `render/Dockerfile` — 3-stage image: Node compiles **both** frontends (web
+  UI → `hermes_cli/web_dist`, TUI bundle → `hermes_cli/tui_dist/entry.js`),
+  uv installs locked Python deps + aiohttp, `python:3.11-slim` runtime with a
+  copied `node` binary for the Chat-tab PTY. No Playwright/s6 bloat.
 - `render/start.sh` — mode switch (`HERMES_RENDER_MODE`), config seeding,
   port binding, boot banner with the deployed commit SHA.
 - `render/healthcheck.py` — works in both modes (`/api/health`, `/health`).
@@ -182,6 +183,15 @@ curl https://<service>.onrender.com/v1/chat/completions \
   on a public bind is mandatory. Set `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`
   and `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`; the image loads the bundled
   basic-auth plugin from `render/trimmed-plugins`.
+- **Chat tab: "Chat connection interrupted (code 1006)":** the in-browser
+  chat spawns the Node-based TUI over `/api/pty` + `/api/ws`. The image must
+  (1) ship the prebuilt TUI bundle `hermes_cli/tui_dist/entry.js` and (2) have
+  `node` + `npm` on PATH (`HERMES_SKIP_NODE_BOOTSTRAP=1` prevents cold-start
+  downloads). The current `render/Dockerfile` builds and ships all of it;
+  seeing 1006 means the running image predates that — rebuild with
+  **Manual Deploy → Clear build cache & deploy**. One open chat adds ~120 MB
+  (Node TUI) on top of the ~155 MB dashboard — a single chat fits the free
+  512 MB tier comfortably; keep concurrent chats low.
 - **`aiohttp not installed` / "no open ports detected":** only possible on
   the native Python runtime (Option C, below) — the Docker image bakes
   aiohttp in.

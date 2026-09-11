@@ -1,0 +1,19 @@
+# Minimal headless Hermes config for a Render free web service.
+# Copied into $HERMES_HOME/config.yaml on first boot by render/start.sh.
+#
+# Secrets (API_SERVER_KEY, OPENROUTER_API_KEY, ...) are provided as Render
+# environment variables and must NEVER be committed here.
+
+model:
+  # Any OpenRouter model id. The ":free" suffix models cost $0 but are
+  # rate-limited and rotate over time — see https://openrouter.ai/models?max_price=0
+  # Replace with a paid model (e.g. "anthropic/claude-sonnet-4") if you have
+  # credits. Hermes needs a tool-calling-capable model.
+  default: "meta-llama/llama-3.3-70b-instruct:free"
+
+  # Other options: "openai", "anthropic", "gemini", "deepinfra", "nous-api",
+  # "custom" (self-hosted OpenAI-compatible endpoint), ...
+  provider: "openrouter"
+
+  base_url: "https://openrouter.ai/api/v1"
+  # The key is read from the OPENROUTER_API_KEY environment variable.

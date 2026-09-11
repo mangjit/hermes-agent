@@ -1,0 +1,38 @@
+# Render Blueprint — Hermes Agent gateway as a free web service.
+# Docs: docs/RENDER_DEPLOYMENT.md
+#
+# In Render: New + → Blueprint → pick this repo → Render reads this file.
+# Free plan limitations (sleeps after 15 min idle, 512 MB RAM, ephemeral disk)
+# make this suitable for the HTTP API server, NOT for an always-on
+# Telegram/Discord polling bot — see the doc for details.
+
+services:
+  - type: web
+    name: hermes-agent-api
+    runtime: python
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: pip install -U uv && uv sync --frozen --no-dev
+    startCommand: bash render/start.sh
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Render generates a strong random key at blueprint creation.
+      # Used as the Bearer token for the OpenAI-compatible API.
+      - key: API_SERVER_KEY
+        generateValue: true
+      # Required even though start.sh exports it, so it shows in the dashboard.
+      - key: API_SERVER_HOST
+        value: 0.0.0.0
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      # Model provider key — paste your own after the blueprint is created:
+      # https://openrouter.ai/keys (free models work, $5 credit removes
+      # rate limits / unlocks paid models).
+      - key: OPENROUTER_API_KEY
+        sync: false
+      # If you deploy the web/ dashboard as a static site (see docs), put its
+      # URL here, e.g. https://hermes-dashboard.onrender.com
+      # - key: API_SERVER_CORS_ORIGINS
+      #   sync: false

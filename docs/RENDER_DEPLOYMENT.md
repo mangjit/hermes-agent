@@ -183,6 +183,9 @@ curl https://<service>.onrender.com/v1/chat/completions \
   on a public bind is mandatory. Set `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`
   and `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`; the image loads the bundled
   basic-auth plugin from `render/trimmed-plugins`.
+- **Build fails with `libatomic.so.1: cannot open shared object file`:** old
+  cached image — the runtime stage now installs `libatomic1 libstdc++6` for
+  the copied Node binary; **Clear build cache & deploy**.
 - **Chat tab: "Chat connection interrupted (code 1006)":** the in-browser
   chat spawns the Node-based TUI over `/api/pty` + `/api/ws`. The image must
   (1) ship the prebuilt TUI bundle `hermes_cli/tui_dist/entry.js` and (2) have

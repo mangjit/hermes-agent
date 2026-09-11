@@ -88,7 +88,11 @@ ENV SOURCE_COMMIT=${SOURCE_COMMIT} \
 
 # node + npm at runtime (the Chat PTY checks for both). Copied from the same
 # bookworm-based node image used in stage 1, so glibc matches. Pattern mirrors
-# the repo's root Dockerfile.
+# the repo's root Dockerfile. Node 26 additionally links libatomic (and wants
+# libstdc++6/ca-certificates), none of which python:3.11-slim guarantees.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libatomic1 libstdc++6 ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 COPY --chmod=0755 --from=web /usr/local/bin/node /usr/local/bin/
 COPY --from=web /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \

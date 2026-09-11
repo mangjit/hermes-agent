@@ -14,7 +14,12 @@ services:
     region: oregon
     # No `branch:` pin — Render deploys the branch you select when creating
     # the Blueprint (change it later under Settings → Build & Deploy).
-    buildCommand: pip install -U uv && uv sync --frozen --no-dev
+    # The api_server adapter is an aiohttp app; aiohttp lives in an optional
+    # extra (lazy-installed on normal installs), so install the tiny `sms`
+    # extra which pulls only aiohttp==3.14.3 from the lockfile. Without it
+    # you get "aiohttp not installed / No adapter available for api_server"
+    # and Render fails with "no open ports detected".
+    buildCommand: pip install -U uv && uv sync --frozen --no-dev --extra sms
     startCommand: bash render/start.sh
     healthCheckPath: /health
     autoDeploy: true

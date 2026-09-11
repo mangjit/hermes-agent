@@ -57,7 +57,7 @@ If you don't want the blueprint, create **New + → Web Service** and set:
 |---|---|
 | Runtime | Python 3 |
 | Branch | your branch (e.g. `main`) |
-| Build command | `pip install -U uv && uv sync --frozen --no-dev` |
+| Build command | `pip install -U uv && uv sync --frozen --no-dev --extra sms` |
 | Start command | `bash render/start.sh` |
 | Instance type | **Free** |
 | Health check path | `/health` |
@@ -213,6 +213,23 @@ alongside a paid service instead.
   check the model id against <https://build.nvidia.com/models> (or your
   provider's catalog), add credits, or switch providers in
   `render/config.yaml`.
+- **`aiohttp not installed` / `No adapter available for api_server` / "no open ports detected":**
+  the API server is an aiohttp app; aiohttp is an optional/lazy dependency
+  omitted by `uv sync --no-dev`. The shipped build command uses
+  `uv sync --frozen --no-dev --extra sms` (the small `sms` extra adds only
+  `aiohttp==3.14.3`). If you hand-wrote the build command, add `--extra sms`
+  (or run `.venv/bin/pip install aiohttp==3.14.3` as a second build step).
+- **WAL-reset / SQLite 3.40.1 vulnerable warnings:** Render's built-in SQLite
+  is older; Hermes automatically falls back to `journal_mode=DELETE`, which is
+  safe to ignore on the ephemeral free-tier disk. (The Docker image compiles
+  a fixed SQLite; free Render uses the system one.)
+- **`Failed to load plugin 'slack-platform'` / browser/discord/TTS tool
+  warnings:** expected on a minimal install — those integrations need extra
+  packages and are unavailable; they do not affect the HTTP API. The Slack
+  plugin warning disappears once aiohttp is present; other plugin warnings are
+  harmless.
+- **`No env user allowlists configured`:** refers to messaging platforms
+  (Telegram/Discord/…); irrelevant for an API-only deployment.
 - **Sessions/memory disappear:** expected on free (ephemeral disk). Upgrade to a
   paid instance with a persistent disk mounted at `$HERMES_HOME` to keep them.
 - **Logs show the first-run setup wizard prompt:** it only appears when

@@ -1,7 +1,11 @@
-# Render Blueprint — Hermes Agent gateway as a free web service.
+# Render Blueprint — Hermes Agent gateway as a free Docker web service.
 # Docs: docs/RENDER_DEPLOYMENT.md
 #
-# In Render: New + → Blueprint → pick this repo → Render reads this file.
+# In Render: New + → Blueprint → pick this repo + the branch → Render reads
+# this file and builds the image from render/Dockerfile (all Python deps,
+# including aiohttp, are baked into the image — no native build command to
+# drift out of sync).
+#
 # Free plan limitations (sleeps after 15 min idle, 512 MB RAM, ephemeral disk)
 # make this suitable for the HTTP API server, NOT for an always-on
 # Telegram/Discord polling bot — see the doc for details.
@@ -9,18 +13,14 @@
 services:
   - type: web
     name: hermes-agent-api
-    runtime: python
+    runtime: docker
     plan: free
     region: oregon
     # No `branch:` pin — Render deploys the branch you select when creating
     # the Blueprint (change it later under Settings → Build & Deploy).
-    # The api_server adapter is an aiohttp app; aiohttp lives in an optional
-    # extra (lazy-installed on normal installs), so install the tiny `sms`
-    # extra which pulls only aiohttp==3.14.3 from the lockfile. Without it
-    # you get "aiohttp not installed / No adapter available for api_server"
-    # and Render fails with "no open ports detected".
-    buildCommand: pip install -U uv && uv sync --frozen --no-dev --extra sms
-    startCommand: bash render/start.sh
+    dockerfilePath: render/Dockerfile
+    dockerContext: .
+    # No dockerCommand: the image CMD is `bash render/start.sh`.
     healthCheckPath: /health
     autoDeploy: true
     envVars:

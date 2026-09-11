@@ -25,40 +25,52 @@ Incoming webhooks (Telegram webhook mode, Slack/Socket mode is polling) *can* wa
 free service, but Hermes' cold start under 512 MB often exceeds Telegram's ~60 s
 webhook timeout — expect dropped updates. Use polling bots on a paid plan.
 
-## Option A — Deploy with the Blueprint (easiest)
+## Files in this repo
 
-This repo now contains:
-
-- `render.yaml` — service definition (free Python web service)
-- `render/start.sh` — binds `$PORT`, seeds config, runs `hermes gateway run`
+- `render.yaml` — service definition (**free Docker web service**)
+- `render/Dockerfile` — lightweight image: Python 3.11 + locked deps + aiohttp,
+  no Node/Playwright/s6 (the full-fat repo `Dockerfile` is for desktop-style
+  deployments and is overkill here)
+- `render/start.sh` — binds `$PORT`, seeds config, fast-boot knobs, runs
+  `hermes gateway run --no-supervise`
 - `render/config.yaml` — minimal headless model config (provider + model)
+
+Docker is the recommended path: every dependency is baked into the image at
+build time, so Render's Build Command can never drift out of sync (the problem
+that causes `aiohttp not installed` / `no open ports detected`).
+
+## Option A — Deploy with the Blueprint (easiest)
 
 Steps:
 
 1. Push the repo to your GitHub account (Render deploys from GitHub/GitLab).
 2. Sign up / log in at <https://dashboard.render.com> (free, no card required).
-3. **New + → Blueprint** and connect your repo. Render reads `render.yaml`.
+3. **New + → Blueprint** and connect your repo + branch (
+   `arena/01a090db-hermes-agent` until it is merged). Render reads `render.yaml`
+   and builds `render/Dockerfile`.
+   > If an earlier (native Python) service already exists from this repo,
+   > Blueprint Sync won't convert its runtime — delete that service first, or
+   > give the new one a different `name` in `render.yaml`.
 4. When prompted, fill the provider key(s) — the default `render/config.yaml`
    uses **NVIDIA NIM**, so set `NVIDIA_API_KEY` (get it at
    <https://build.nvidia.com> → "Get API Key", starts with `nvapi-`; new
    accounts get free credits). Using another provider? See
    [Adding providers](#adding-providers-nvidia-nim-openai-groq-others).
-5. Click **Apply**. Render builds (`uv sync` from `uv.lock`) and starts the service.
-6. Watch the **Logs** tab; success looks like the api_server adapter binding
-   `0.0.0.0:$PORT` and a `200 OK` on the health check.
+5. Click **Apply**. The first image build takes ~3–7 min; later builds cache
+   the dependency layer.
+6. Watch the **Logs** tab; the banner prints the deployed commit, then the
+   health check goes green and the API answers at
+   `https://<service-name>.onrender.com/v1`.
 
-Your API base URL is `https://<service-name>.onrender.com/v1`.
+## Option B — Manual Docker web service
 
-## Option B — Manual web service setup
-
-If you don't want the blueprint, create **New + → Web Service** and set:
+**New + → Web Service** → connect the repo/branch and set:
 
 | Field | Value |
 |---|---|
-| Runtime | Python 3 |
-| Branch | your branch (e.g. `main`) |
-| Build command | `pip install -U uv && uv sync --frozen --no-dev --extra sms` |
-| Start command | `bash render/start.sh` |
+| Language/Runtime | **Docker** |
+| Dockerfile Path | `render/Dockerfile` |
+| Docker Build Context Directory | `.` (repo root) |
 | Instance type | **Free** |
 | Health check path | `/health` |
 
@@ -68,9 +80,16 @@ Then under **Environment** add:
 |---|---|
 | `API_SERVER_KEY` | output of `openssl rand -hex 32` (≥ 16 chars, required) |
 | `NVIDIA_API_KEY` | your NVIDIA NIM key (or the key for whatever provider `render/config.yaml` uses) |
-| `API_SERVER_HOST` | `0.0.0.0` |
 
-`API_SERVER_PORT` is set to Render's `$PORT` automatically by `render/start.sh`.
+No start/build commands are needed — the image CMD already runs
+`render/start.sh`, and `API_SERVER_PORT` is mapped from Render's `$PORT`.
+
+## Option C — Native Python runtime (not recommended)
+
+If you can't use Docker, pick the **Python 3** runtime with build command
+`pip install -U uv && uv sync --frozen --no-dev --extra sms` and start command
+`bash render/start.sh`. `--extra sms` is mandatory (it pulls aiohttp);
+`start.sh` also self-heals a missing aiohttp at boot as a safety net.
 
 ## Adding providers (NVIDIA NIM, OpenAI, Groq, others)
 
@@ -206,39 +225,52 @@ alongside a paid service instead.
   750 free hours and are against the spirit of the free tier — don't.
 - **`Refusing to start: API_SERVER_KEY is required…`:** set `API_SERVER_KEY`
   (min 16 chars; `openssl rand -hex 32`) in the service's environment.
-- **Build failures around Python version:** the repo pins Python via
-  `.python-version` (3.11, within the supported `>=3.11,<3.14`).
+- **Build failures around Python version:** the Docker image pins
+  `python:3.11-slim-bookworm` (the repo supports `>=3.11,<3.14`); native
+  builds follow `.python-version` (3.11).
 - **Model errors / 402 / rate limits:** free-tier models (NVIDIA trial credits
   exhausted, OpenRouter `:free`, Groq limits) are rate/capacity-limited —
   check the model id against <https://build.nvidia.com/models> (or your
   provider's catalog), add credits, or switch providers in
   `render/config.yaml`.
 - **Port opens very slowly / deploy port-scan times out (free 0.1 shared CPU):**
-  `render/start.sh` ships fast-boot knobs for exactly this —
+  `render/start.sh` already ships fast-boot knobs for exactly this —
   `HERMES_SAFE_MODE=1` (skips bundled-plugin/MCP/import-heavy discovery),
   `HERMES_STARTUP_WARMUP_TIMEOUT=0` (defers the tool-registry/system-prompt
   warm-up to the first API request instead of ~20–60 s of `check_fn` scans at
   boot), and `HERMES_STARTUP_RESTORE_DRAIN_TIMEOUT=1` (nothing to resume on
-  ephemeral disk). The success log line is
-  `API server listening on http://0.0.0.0:$PORT (model: …)` — the port opens
-  at that line, typically under ~30–45 s after process start. The **first
-  chat request** after a cold start is slower (lazy machinery init); retry it.
-  To check from outside while it wakes: `curl https://<service>.onrender.com/health`.
+  ephemeral disk). Every boot prints a banner
+  (`== render/start.sh (commit <sha>) ==`, `aiohttp 3.14.3 OK`,
+  `SAFE_MODE=1 WARMUP_TIMEOUT=0 RESTORE_DRAIN=1`); on the free instance the
+  health check typically goes green within ~30–60 s of process start. The
+  **first chat request** after a cold start is slower (lazy machinery init);
+  retry it. If you still see `warm-up still running after 20s` or the
+  slack-plugin line in logs, the deploy is running an old `start.sh` — check
+  the commit in the banner against the branch HEAD.
+- **Verifying which commit is deployed:** the first log line contains the
+  commit SHA (Render provides it as `SOURCE_COMMIT` in Docker builds). If it
+  doesn't match the latest push, use **Manual Deploy → Clear build cache &
+  deploy** and confirm the tracked branch.
 - **`aiohttp not installed` / `No adapter available for api_server` / "no open ports detected":**
-  the API server is an aiohttp app; aiohttp is an optional/lazy dependency
-  omitted by `uv sync --no-dev`. The shipped build command uses
-  `uv sync --frozen --no-dev --extra sms` (the small `sms` extra adds only
-  `aiohttp==3.14.3`). If you hand-wrote the build command, add `--extra sms`
-  (or run `.venv/bin/pip install aiohttp==3.14.3` as a second build step).
-- **WAL-reset / SQLite 3.40.1 vulnerable warnings:** Render's built-in SQLite
-  is older; Hermes automatically falls back to `journal_mode=DELETE`, which is
-  safe to ignore on the ephemeral free-tier disk. (The Docker image compiles
-  a fixed SQLite; free Render uses the system one.)
+  you're on the native Python runtime without `--extra sms` (Option C), or
+  deploying an older commit. With the Docker image (Options A/B) aiohttp is
+  baked in and the boot banner prints `aiohttp 3.14.3 OK`; `start.sh` also
+  self-installs it as a last resort.
+- **WAL-reset / SQLite 3.40.1 vulnerable warnings:** the slim image / Render
+  ships SQLite 3.40.1; Hermes automatically falls back to
+  `journal_mode=DELETE`, which is safe to ignore on the ephemeral free-tier
+  disk (the full repo Dockerfile compiles a patched SQLite; the slim render
+  image doesn't bother).
 - **`Failed to load plugin 'slack-platform'` / browser/discord/TTS tool
-  warnings:** expected on a minimal install — those integrations need extra
-  packages and are unavailable; they do not affect the HTTP API. The Slack
-  plugin warning disappears once aiohttp is present; other plugin warnings are
-  harmless.
+  warnings:** these come from plugin/tool discovery. The shipped
+  `HERMES_SAFE_MODE=1` (see below) skips plugin discovery entirely; if you
+  override safe mode, the warnings are harmless on a minimal image — those
+  integrations need optional packages and do not affect the HTTP API.
+- **`API server is network-accessible (0.0.0.0) AND the terminal backend is
+  'local'`:** expected — the agent's terminal/file tools run inside the
+  container. The bearer `API_SERVER_KEY` is the security boundary; keep it
+  secret (rotate it in Render if leaked), and don't attach a persistent disk
+  with sensitive data on the free tier.
 - **`No env user allowlists configured`:** refers to messaging platforms
   (Telegram/Discord/…); irrelevant for an API-only deployment.
 - **Sessions/memory disappear:** expected on free (ephemeral disk). Upgrade to a

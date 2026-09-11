@@ -7,8 +7,10 @@ cd "$(dirname "$0")/.."
 REPO_ROOT="$(pwd)"
 
 # ── Diagnostics: prove which commit + deps this deploy is actually running ───
-echo "== render/start.sh =="
-echo "   commit: $(git rev-parse --short HEAD 2>/dev/null || echo 'unknown (no git)')"
+# Render passes SOURCE_COMMIT as a Docker build arg/ENV; native checkouts fall
+# back to git.
+COMMIT="${SOURCE_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+echo "== render/start.sh (commit ${COMMIT:0:9}) =="
 echo "   PORT=${PORT:-<unset>}  HERMES_HOME=${HERMES_HOME:-<unset>}"
 
 # ── Dependency self-heal ─────────────────────────────────────────────────────

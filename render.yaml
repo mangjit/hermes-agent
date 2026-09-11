@@ -12,7 +12,8 @@ services:
     runtime: python
     plan: free
     region: oregon
-    branch: main
+    # No `branch:` pin — Render deploys the branch you select when creating
+    # the Blueprint (change it later under Settings → Build & Deploy).
     buildCommand: pip install -U uv && uv sync --frozen --no-dev
     startCommand: bash render/start.sh
     healthCheckPath: /health
